@@ -1,0 +1,1602 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Compilador por etapas</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..700&family=Spline+Sans+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --ink: #1b2433;
+      --ink-2: #4a5568;
+      --ink-3: #6b7789;
+      --paper: #ffffff;
+      --mist: #eef1f6;
+      --line: #d5dce8;
+      --line-2: #e6eaf2;
+      --accent: #2f5bea;
+      --accent-soft: #e6ecff;
+      --ok: #12805c;
+      --ok-soft: #e3f5ee;
+      --bad: #c62e2e;
+      --bad-soft: #fdeaea;
+      --warn-soft: #fff6d6;
+      --font-ui: "Bricolage Grotesque", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      --font-code: "Spline Sans Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+
+    body {
+      margin: 0;
+      background: var(--mist);
+      color: var(--ink);
+      font: 400 15px/1.5 var(--font-ui);
+    }
+    button, select, textarea { font: inherit; color: inherit; }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    .app { max-width: 1280px; margin: 0 auto; padding: 20px 24px 36px; }
+
+    /* ---------- Barra superior ---------- */
+    .topbar {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 16px; flex-wrap: wrap; margin-bottom: 26px;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .brand svg { flex: none; }
+    .brand h1 { margin: 0; font-size: 22px; line-height: 1.15; font-weight: 700; letter-spacing: -0.01em; }
+    .brand p { margin: 2px 0 0; color: var(--ink-2); font-size: 14px; }
+
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px; white-space: nowrap;
+      border: 1px solid var(--line); background: var(--paper);
+      border-radius: 8px; padding: 8px 14px; font-weight: 500; cursor: pointer;
+      transition: background-color .15s, border-color .15s;
+    }
+    .btn:hover { background: var(--mist); }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; padding: 9px 16px; }
+    .btn.primary:hover { background: #2549c9; }
+    .btn.primary:disabled { opacity: .5; cursor: not-allowed; }
+    .btn.ghost { background: transparent; border-color: transparent; color: var(--ink-2); }
+    .btn.ghost:hover { background: var(--mist); color: var(--ink); }
+    .btn.small { padding: 5px 10px; font-size: 13px; }
+    .btn kbd {
+      font: 500 11px/1 var(--font-ui); background: rgba(255, 255, 255, .22);
+      border-radius: 4px; padding: 3px 6px;
+    }
+
+    /* ---------- Pipeline ---------- */
+    .pipeline { margin-bottom: 26px; }
+    .pipeline ol { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, 1fr); }
+    .station { position: relative; text-align: center; padding: 0 6px; }
+    .station + .station::before,
+    .station + .station::after {
+      content: ""; position: absolute; top: 19px; left: -50%; width: 100%; height: 3px; border-radius: 2px;
+    }
+    .station + .station::before { background: var(--line); }
+    .station + .station::after {
+      background: var(--accent); transform: scaleX(0); transform-origin: left;
+      transition: transform .6s ease;
+    }
+    .station.reached::after { transform: scaleX(1); }
+    .station.reached-bad::after { background: var(--bad); transform: scaleX(1); }
+
+    .flow {
+      position: absolute; top: 0; left: -50%; width: 100%;
+      font-size: 12px; line-height: 16px; color: var(--ink-3); pointer-events: none;
+    }
+
+    .st {
+      position: relative; z-index: 1;
+      display: flex; flex-direction: column; align-items: center;
+      width: 100%; padding: 0; background: none; border: 0; text-align: center;
+    }
+    button.st { cursor: pointer; }
+    .dot {
+      width: 38px; height: 38px; border-radius: 50%;
+      display: grid; place-items: center;
+      font-weight: 700; font-size: 15px; color: var(--ink-3);
+      background: var(--paper); border: 2px solid var(--line);
+      box-shadow: 0 0 0 4px var(--mist);
+      transition: background-color .3s, border-color .3s, box-shadow .2s;
+    }
+    .dot.square { border-radius: 10px; font-family: var(--font-code); font-size: 13px; color: var(--ink-2); }
+    .station.is-soon .dot { border-style: dashed; }
+    .station.is-ok .dot { background: var(--ok); border-color: var(--ok); color: #fff; }
+    .station.is-error .dot { background: var(--bad); border-color: var(--bad); color: #fff; }
+    .station.is-blocked .dot { background: var(--mist); border-color: var(--line); color: var(--ink-3); border-style: dashed; }
+    .station.is-active .dot { box-shadow: 0 0 0 4px var(--mist), 0 0 0 7px var(--accent-soft); }
+    .station.is-active:not(.is-ok):not(.is-error):not(.is-blocked) .dot { border-color: var(--accent); color: var(--accent); }
+    .station.is-stale .dot { opacity: .6; }
+
+    .name { margin-top: 10px; font-weight: 600; font-size: 15px; }
+    .station.is-active .name { color: var(--accent); }
+    button.st:hover .name { color: var(--accent); }
+    .desc { margin: 3px auto 0; max-width: 27ch; font-size: 13px; line-height: 1.35; color: var(--ink-2); }
+    .state {
+      margin-top: 8px; padding: 2px 10px; border-radius: 999px; white-space: nowrap;
+      font-size: 12px; font-weight: 500; color: var(--ink-3);
+      background: var(--paper); border: 1px solid var(--line);
+    }
+    .station.is-ok .state { background: var(--ok-soft); border-color: transparent; color: #0b5d42; }
+    .station.is-error .state { background: var(--bad-soft); border-color: transparent; color: #8f1f1f; }
+    .station.is-stale .state { background: var(--warn-soft); border-color: transparent; color: #6b4f00; }
+
+    /* ---------- Paneles ---------- */
+    .workspace {
+      display: grid; grid-template-columns: minmax(340px, 5fr) minmax(0, 7fr); gap: 18px;
+      height: clamp(520px, calc(100vh - 290px), 780px);
+    }
+    .panel {
+      display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden;
+      background: var(--paper); border: 1px solid var(--line); border-radius: 12px;
+      transition: border-color .15s;
+    }
+    .panel:focus-within { border-color: #9db3f5; }
+    .panel-head {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+      padding: 10px 14px; border-bottom: 1px solid var(--line-2);
+    }
+    .panel-head h2 { margin: 0; font-size: 16px; font-weight: 600; }
+    .tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+    .select {
+      border: 1px solid var(--line); border-radius: 8px; background: var(--paper);
+      padding: 6px 10px; font-size: 13px; cursor: pointer; max-width: 100%;
+    }
+
+    /* ---------- Editor ---------- */
+    .editor { flex: 1; min-height: 0; display: flex; background: var(--paper); }
+    .gutter {
+      flex: none; width: 52px; overflow: hidden; padding: 12px 0 18px; text-align: right;
+      font: 400 13px/24px var(--font-code); color: var(--ink-3);
+      background: #f7f9fc; border-right: 1px solid var(--line-2); user-select: none;
+    }
+    .gutter div { height: 24px; padding-right: 10px; }
+    .gutter .err { background: var(--bad-soft); color: var(--bad); font-weight: 500; }
+    .gutter .warn { background: var(--warn-soft); color: #8a6100; font-weight: 500; }
+    #codigo {
+      flex: 1; min-width: 0; border: 0; border-radius: 0; resize: none; outline: none;
+      padding: 12px 14px; font: 400 14px/24px var(--font-code);
+      white-space: pre; overflow: auto; tab-size: 2;
+      background-color: var(--paper);
+      background-image: linear-gradient(to bottom, transparent 23px, var(--line-2) 23px);
+      background-size: 100% 24px; background-position: 0 12px; background-attachment: local;
+    }
+    .editor-foot {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+      padding: 10px 14px; border-top: 1px solid var(--line-2);
+    }
+    .meta { display: flex; gap: 14px; flex-wrap: wrap; color: var(--ink-3); font-size: 13px; }
+    .actions { display: flex; align-items: center; gap: 8px; }
+
+    /* ---------- Resultados ---------- */
+    .seg { display: inline-flex; background: var(--mist); border-radius: 8px; padding: 2px; }
+    .seg button {
+      border: 0; background: none; padding: 5px 12px; border-radius: 6px;
+      font-size: 13px; font-weight: 500; color: var(--ink-2); cursor: pointer;
+    }
+    .seg button[aria-pressed="true"] { background: var(--paper); color: var(--ink); box-shadow: 0 1px 2px rgba(27, 36, 51, .14); }
+
+    .stale-banner {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+      padding: 9px 14px; background: var(--warn-soft); color: #6b4f00;
+      font-size: 14px; border-bottom: 1px solid #f2e2a0;
+    }
+    .result-view { flex: 1; min-height: 0; display: flex; flex-direction: column; transition: opacity .2s; }
+    .panel.is-stale .result-view { opacity: .5; }
+
+    .status { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; padding: 12px 14px; font-weight: 500; }
+    .status > span:nth-child(2) { flex: 1 1 240px; min-width: 0; }
+    .status .btn { margin-left: auto; flex: none; }
+    .status.ok { background: var(--ok-soft); color: #0b5d42; }
+    .status.bad { background: var(--bad-soft); color: #8f1f1f; }
+    .status .mark {
+      flex: none; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center;
+      color: #fff; font-size: 13px; font-weight: 700; margin-top: 1px;
+    }
+    .status.ok .mark { background: var(--ok); }
+    .status.bad .mark { background: var(--bad); }
+
+    .errors {
+      list-style: none; margin: 0; padding: 6px 10px 8px; max-height: 210px; overflow: auto;
+      border-bottom: 1px solid var(--line-2); flex: none;
+    }
+    .errors button {
+      width: 100%; display: flex; gap: 14px; text-align: left; border: 0; background: none;
+      padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 14px;
+    }
+    .errors button:hover { background: var(--bad-soft); }
+    .errors .where { flex: none; min-width: 132px; font-weight: 600; color: var(--bad); }
+    .errors.warns { max-height: 150px; }
+    .errors.warns button:hover { background: var(--warn-soft); }
+    .errors.warns .where { color: #8a6100; }
+    .list-title { margin: 0; padding: 10px 14px 0; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+    .list-title small { font-weight: 400; color: var(--ink-3); }
+    .scroll-col { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+    .scroll-col .errors { max-height: none; overflow: visible; }
+    .scroll-col .table-wrap, .scroll-col .tree-wrap { flex: none; overflow: visible; min-height: auto; }
+    td.used-no { color: #8a6100; font-weight: 500; }
+
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 14px; border-bottom: 1px solid var(--line-2); }
+    .chip {
+      display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+      border: 1px solid var(--line); background: var(--paper); border-radius: 999px;
+      padding: 3px 11px 3px 9px; font-size: 13px;
+    }
+    .chip:hover { background: var(--mist); }
+    .chip .sw { width: 9px; height: 9px; border-radius: 50%; background: var(--fg, var(--ink-3)); }
+    .chip b { font-weight: 600; color: var(--ink-2); }
+    .chip[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: #fff; }
+    .chip[aria-pressed="true"] b { color: #fff; }
+
+    .table-wrap { flex: 1; min-height: 0; overflow: auto; }
+    table { width: 100%; min-width: 520px; border-collapse: collapse; font-size: 14px; }
+    th {
+      position: sticky; top: 0; z-index: 1; background: var(--paper); text-align: left;
+      font-weight: 600; font-size: 13px; color: var(--ink-2);
+      padding: 8px 14px; border-bottom: 1px solid var(--line);
+    }
+    td { padding: 7px 14px; border-bottom: 1px solid var(--line-2); vertical-align: middle; }
+    td.code { font: 400 13px/1.45 var(--font-code); white-space: pre-wrap; overflow-wrap: anywhere; }
+    td.num { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+    tbody tr { cursor: pointer; }
+    tbody tr:hover { background: #f6f8fc; }
+    tbody tr.sel { background: var(--accent-soft); }
+    tbody tr.end td { color: var(--ink-3); }
+
+    .badge {
+      display: inline-block; white-space: nowrap; border-radius: 6px; padding: 2px 8px;
+      font-size: 12px; font-weight: 600; background: var(--tint); color: var(--fg);
+    }
+
+    .code-view {
+      flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 14px;
+      font: 400 14px/1.75 var(--font-code); white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 2;
+    }
+    .code-view.json { font-size: 13px; line-height: 1.55; white-space: pre; overflow-wrap: normal; }
+    .tok { color: var(--fg); border-radius: 3px; cursor: pointer; }
+    .tok:hover { background: var(--tint); }
+    .tok.dim { opacity: .2; }
+    .tok.has-err, .errmark { text-decoration: underline wavy var(--bad); text-underline-offset: 4px; }
+    .errmark { background: var(--bad-soft); color: var(--bad); border-radius: 3px; cursor: pointer; }
+    .cmt { color: var(--ink-3); font-style: italic; }
+
+    .empty {
+      flex: 1; display: grid; place-content: center; justify-items: center; gap: 12px;
+      padding: 32px; text-align: center; color: var(--ink-2);
+    }
+    .empty h3 { margin: 0; font-size: 19px; color: var(--ink); }
+    .empty p { margin: 0; max-width: 40ch; }
+    .empty ol { margin: 4px 0 0; padding-left: 20px; text-align: left; display: grid; gap: 4px; }
+
+    .locked { flex: 1; overflow: auto; padding: 28px 24px; display: grid; align-content: start; justify-items: start; gap: 16px; }
+    .locked h3 { margin: 0; font-size: 19px; }
+    .locked p { margin: 0; max-width: 56ch; color: var(--ink-2); }
+    .io { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .io .box { border: 1.5px dashed var(--line); border-radius: 10px; padding: 10px 14px; background: var(--paper); font-size: 14px; }
+    .io .box small { display: block; color: var(--ink-3); font-size: 12px; }
+    .io .pipe { flex: none; width: 28px; height: 2px; background: var(--line); }
+    .locked .note { padding: 10px 14px; border-radius: 8px; background: var(--accent-soft); color: #1f3fa8; font-weight: 500; max-width: 56ch; }
+
+    .caption { margin: 0; padding: 8px 14px 0; font-size: 13px; color: var(--ink-3); }
+
+    /* ---------- Árbol sintáctico ---------- */
+    .tree-wrap { flex: 1; min-height: 0; overflow: auto; padding: 8px 14px 18px; }
+    .tree, .tree ul { list-style: none; margin: 0; padding: 0; }
+    .tree ul { margin-left: 11px; padding-left: 12px; border-left: 1px solid var(--line-2); }
+    .trow {
+      display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+      min-height: 30px; padding: 2px 4px; border-radius: 6px;
+    }
+    .trow:hover { background: #f6f8fc; }
+    .trow.sel { background: var(--accent-soft); }
+    .caret {
+      flex: none; width: 22px; height: 22px; border: 0; background: none; border-radius: 5px;
+      cursor: pointer; color: var(--ink-3); display: grid; place-items: center; padding: 0;
+    }
+    .caret:hover { background: var(--mist); color: var(--ink); }
+    .caret::before {
+      content: ""; width: 6px; height: 6px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor;
+      transform: rotate(-45deg); transition: transform .15s;
+    }
+    .caret[aria-expanded="true"]::before { transform: rotate(45deg); }
+    .spacer { flex: none; width: 22px; }
+    .tlabel { color: var(--ink-3); font-size: 13px; }
+    .tgroup { color: var(--ink-2); font-size: 13px; font-weight: 600; }
+    .tnode {
+      border: 0; cursor: pointer; border-radius: 6px; padding: 2px 8px;
+      font-size: 12px; font-weight: 600; background: var(--tint); color: var(--fg);
+    }
+    .tnode:hover { filter: brightness(.95); }
+    .tsum { font: 500 13px/1.4 var(--font-code); overflow-wrap: anywhere; }
+    .tchip { font-size: 12px; color: var(--ink-2); background: var(--mist); border-radius: 4px; padding: 1px 6px; }
+    .tchip b { font-weight: 600; color: var(--ink); }
+
+    .n-prog { --tint: #e2e8f0; --fg: #1e293b; }
+    .n-decl { --tint: #ede9fe; --fg: #5b21b6; }
+    .n-stmt { --tint: #dbeafe; --fg: #1e40af; }
+    .n-expr { --tint: #ffedd5; --fg: #9a3412; }
+    .n-lit  { --tint: #dcfce7; --fg: #166534; }
+    .n-id   { --tint: #f1f5f9; --fg: #334155; }
+
+    /* ---------- Colores por categoría de token ---------- */
+    .c-KEYWORD    { --tint: #ede9fe; --fg: #5b21b6; }
+    .c-TYPE       { --tint: #dbeafe; --fg: #1e40af; }
+    .c-IDENTIFIER { --tint: #e2e8f0; --fg: #334155; }
+    .c-INT        { --tint: #fef3c7; --fg: #92400e; }
+    .c-FLOAT      { --tint: #ffedd5; --fg: #9a3412; }
+    .c-STRING     { --tint: #dcfce7; --fg: #166534; }
+    .c-ARITHMETIC { --tint: #fce7f3; --fg: #9d174d; }
+    .c-ASSIGNMENT { --tint: #ffe4e6; --fg: #9f1239; }
+    .c-COMPARISON { --tint: #fee2e2; --fg: #991b1b; }
+    .c-LOGICAL    { --tint: #fae8ff; --fg: #86198f; }
+    .c-BITWISE    { --tint: #e0e7ff; --fg: #3730a3; }
+    .c-INCDEC     { --tint: #cffafe; --fg: #155e75; }
+    .c-OPERATOR   { --tint: #ccfbf1; --fg: #115e59; }
+    .c-DELIMITER  { --tint: #f1f5f9; --fg: #64748b; }
+    .c-SYMBOL     { --tint: #e7e5e4; --fg: #292524; }
+    .c-EOF        { --tint: #f1f5f9; --fg: #94a3b8; }
+    .c-NOTE       { --tint: #f1f5f9; --fg: #475569; }
+
+    /* ---------- Diálogo de referencia ---------- */
+    dialog {
+      border: 0; border-radius: 14px; padding: 0; width: min(880px, 94vw); max-height: 86vh;
+      overflow: auto; color: var(--ink); background: var(--paper);
+      box-shadow: 0 24px 60px rgba(27, 36, 51, .3);
+    }
+    dialog::backdrop { background: rgba(27, 36, 51, .5); }
+    .dlg-head {
+      position: sticky; top: 0; z-index: 2; background: var(--paper);
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 16px 20px; border-bottom: 1px solid var(--line-2);
+    }
+    .dlg-head h2 { margin: 0; font-size: 19px; }
+    .dlg-body { padding: 6px 20px 22px; }
+    .dlg-body > p { color: var(--ink-2); max-width: 64ch; }
+    .alfa-row {
+      display: grid; grid-template-columns: minmax(130px, 170px) minmax(0, 1fr);
+      gap: 8px 14px; align-items: start; margin: 12px 0; font-size: 13px;
+    }
+    .alfa-row .badge { justify-self: start; white-space: normal; line-height: 1.3; padding: 4px 9px; }
+    .alfa-items { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+    .alfa-items code { background: var(--mist); padding: 1px 7px; border-radius: 4px; font: 400 13px/1.6 var(--font-code); }
+    .alfa-note { overflow-wrap: anywhere; line-height: 1.5; }
+    .dlg-body h3 { margin: 22px 0 4px; font-size: 15px; }
+
+    /* ---------- Aviso y toast ---------- */
+    .fatal { margin-bottom: 18px; padding: 12px 16px; border-radius: 10px; background: var(--bad-soft); color: #8f1f1f; font-weight: 500; }
+    .toast {
+      position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 12px);
+      background: var(--ink); color: #fff; padding: 9px 16px; border-radius: 8px; font-size: 14px;
+      opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 50;
+    }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+    /* ---------- Responsive ---------- */
+    @media (max-width: 980px) {
+      .workspace { grid-template-columns: 1fr; height: auto; }
+      .editor { height: 340px; flex: none; }
+      .panel.results { min-height: 440px; max-height: 80vh; }
+    }
+    @media (max-width: 640px) {
+      .app { padding: 14px 14px 28px; }
+      .desc, .flow { display: none; }
+      .name { font-size: 13px; }
+      .state { font-size: 11px; padding: 2px 7px; }
+      .btn kbd { display: none; }
+      .dot { width: 34px; height: 34px; }
+      .station + .station::before, .station + .station::after { top: 17px; }
+      .alfa-row { grid-template-columns: 1fr; gap: 4px; }
+      .errors .where { min-width: 0; }
+      .errors button { flex-direction: column; gap: 2px; }
+      .tree ul { margin-left: 8px; padding-left: 8px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      * { transition: none !important; animation: none !important; }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="app">
+
+    <header class="topbar">
+      <div class="brand">
+        <svg width="40" height="40" viewBox="0 0 40 40" aria-hidden="true">
+          <rect width="40" height="40" rx="10" fill="#2f5bea" />
+          <circle cx="11" cy="20" r="3.5" fill="#fff" />
+          <circle cx="20" cy="20" r="3.5" fill="#fff" opacity=".75" />
+          <circle cx="29" cy="20" r="3.5" fill="#fff" opacity=".5" />
+          <path d="M14.5 20h2M23.5 20h2" stroke="#fff" stroke-width="1.5" />
+        </svg>
+        <div>
+          <h1>Compilador por etapas</h1>
+          <p>Escribe código y mira cómo lo analiza cada etapa.</p>
+        </div>
+      </div>
+      <button class="btn" type="button" id="btnRef">Referencia del lenguaje</button>
+    </header>
+
+    <div class="fatal" id="fatal" role="alert" hidden></div>
+
+    <nav class="pipeline" aria-label="Etapas del compilador">
+      <ol>
+        <li class="station" id="li-0">
+          <div class="st">
+            <span class="dot square" aria-hidden="true">{ }</span>
+            <span class="name">Tu código</span>
+            <span class="desc">Lo que escribes en el editor</span>
+            <span class="state" id="state-0">1 línea</span>
+          </div>
+        </li>
+        <li class="station" id="li-1">
+          <span class="flow">texto</span>
+          <button class="st" type="button" data-step="1">
+            <span class="dot" id="dot-1">1</span>
+            <span class="name">Análisis léxico</span>
+            <span class="desc">Separa el código en piezas llamadas tokens</span>
+            <span class="state" id="state-1">Sin ejecutar</span>
+          </button>
+        </li>
+        <li class="station" id="li-2">
+          <span class="flow">tokens</span>
+          <button class="st" type="button" data-step="2">
+            <span class="dot" id="dot-2">2</span>
+            <span class="name">Análisis sintáctico</span>
+            <span class="desc">Comprueba que las piezas formen instrucciones válidas</span>
+            <span class="state" id="state-2">Sin ejecutar</span>
+          </button>
+        </li>
+        <li class="station" id="li-3">
+          <span class="flow">árbol (AST)</span>
+          <button class="st" type="button" data-step="3">
+            <span class="dot" id="dot-3">3</span>
+            <span class="name">Análisis semántico</span>
+            <span class="desc">Comprueba que el programa tenga sentido: variables y tipos</span>
+            <span class="state" id="state-3">Sin ejecutar</span>
+          </button>
+        </li>
+      </ol>
+    </nav>
+
+    <main class="workspace">
+
+      <section class="panel" aria-labelledby="tituloEditor">
+        <div class="panel-head">
+          <h2 id="tituloEditor">Código fuente</h2>
+          <select class="select" id="ejemplos" aria-label="Cargar un ejemplo"></select>
+        </div>
+        <div class="editor">
+          <div class="gutter" id="gutter" aria-hidden="true"></div>
+          <textarea id="codigo" wrap="off" spellcheck="false" autocomplete="off" autocapitalize="off"
+            aria-label="Código fuente"></textarea>
+        </div>
+        <div class="editor-foot">
+          <div class="meta" aria-live="off">
+            <span id="pos">Línea 1, columna 1</span>
+          </div>
+          <div class="actions">
+            <button class="btn ghost" type="button" id="btnLimpiar">Limpiar</button>
+            <button class="btn primary" type="button" id="btnAnalizar">Analizar código <kbd id="kbd">Ctrl Enter</kbd></button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel results" id="panelRes" aria-labelledby="resTitle">
+        <div class="panel-head">
+          <h2 id="resTitle">Análisis léxico</h2>
+          <div class="tools" id="resTools" hidden></div>
+        </div>
+        <div class="stale-banner" id="staleBanner" hidden>
+          <span>Cambiaste el código. Estos resultados ya no lo reflejan.</span>
+          <button class="btn small" type="button" id="btnReanalizar">Analizar de nuevo</button>
+        </div>
+        <div class="result-view" id="resultView" aria-live="polite"></div>
+      </section>
+
+    </main>
+  </div>
+
+  <dialog id="dlgRef" aria-labelledby="refTitulo">
+    <div class="dlg-head">
+      <h2 id="refTitulo">Referencia del lenguaje</h2>
+      <button class="btn small" type="button" id="btnCerrarRef">Cerrar</button>
+    </div>
+    <div class="dlg-body" id="refBody"></div>
+  </dialog>
+
+  <div class="toast" id="toast" role="status"></div>
+
+  <script src="lexer.js"></script>
+  <script src="parser.js"></script>
+  <script src="semantic.js"></script>
+  <script>
+    (function () {
+      'use strict';
+
+      const LINE_H = 24;
+      const $ = (id) => document.getElementById(id);
+
+      // ---------- Utilidades ----------
+      function h(tag, props, ...kids) {
+        const n = document.createElement(tag);
+        if (props) {
+          for (const [k, v] of Object.entries(props)) {
+            if (v == null || v === false) continue;
+            if (k === 'class') n.className = v;
+            else if (k === 'text') n.textContent = v;
+            else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
+            else n.setAttribute(k, v === true ? '' : v);
+          }
+        }
+        kids.flat().forEach((c) => {
+          if (c == null || c === false) return;
+          n.append(c.nodeType ? c : document.createTextNode(String(c)));
+        });
+        return n;
+      }
+      const plural = (n, uno, varios) => `${n} ${n === 1 ? uno : varios}`;
+
+      // Nombres en español de cada categoría de token (las claves internas no cambian)
+      const ETIQUETAS = {
+        KEYWORD: 'Palabra reservada',
+        TYPE: 'Tipo de dato',
+        IDENTIFIER: 'Identificador',
+        INT: 'Entero',
+        FLOAT: 'Decimal',
+        STRING: 'Cadena',
+        ARITHMETIC: 'Aritmético',
+        ASSIGNMENT: 'Asignación',
+        COMPARISON: 'Comparación',
+        LOGICAL: 'Lógico',
+        BITWISE: 'Bit a bit',
+        INCDEC: 'Incremento / decremento',
+        OPERATOR: 'Otros operadores',
+        DELIMITER: 'Delimitador',
+        SYMBOL: 'Símbolo',
+        EOF: 'Fin de archivo',
+      };
+      const etiqueta = (t) => ETIQUETAS[t] || t;
+
+      // Nombres en español de los nodos del árbol sintáctico
+      const TIPOS_NODO = {
+        Program: 'Programa',
+        VariableDeclaration: 'Declaración de variable',
+        VariableDeclarator: 'Variable',
+        FunctionDeclaration: 'Declaración de función',
+        Parameter: 'Parámetro',
+        ClassDeclaration: 'Declaración de clase',
+        MethodDefinition: 'Método',
+        FieldDefinition: 'Campo',
+        ReturnStatement: 'return',
+        IfStatement: 'Condicional if',
+        WhileStatement: 'Ciclo while',
+        DoWhileStatement: 'Ciclo do-while',
+        ForStatement: 'Ciclo for',
+        ForInStatement: 'Ciclo for-in',
+        ForOfStatement: 'Ciclo for-of',
+        SwitchStatement: 'switch',
+        SwitchCase: 'Caso',
+        BreakStatement: 'break',
+        ContinueStatement: 'continue',
+        PrintStatement: 'print',
+        ThrowStatement: 'throw',
+        TryStatement: 'try',
+        CatchClause: 'catch',
+        BlockStatement: 'Bloque',
+        ExpressionStatement: 'Expresión',
+        EmptyStatement: 'Instrucción vacía',
+        AssignmentExpression: 'Asignación',
+        ConditionalExpression: 'Condicional ternario',
+        LogicalExpression: 'Operación lógica',
+        BinaryExpression: 'Operación binaria',
+        UnaryExpression: 'Operación unaria',
+        UpdateExpression: 'Incremento / decremento',
+        SequenceExpression: 'Secuencia (coma)',
+        CallExpression: 'Llamada a función',
+        MemberExpression: 'Acceso a miembro',
+        NewExpression: 'Creación (new)',
+        ArrowFunctionExpression: 'Función flecha',
+        ArrayExpression: 'Arreglo',
+        ObjectExpression: 'Objeto',
+        Property: 'Propiedad',
+        Identifier: 'Identificador',
+        Literal: 'Literal',
+        ThisExpression: 'this',
+        ImportDeclaration: 'Importación',
+        ImportDefaultSpecifier: 'Importación por defecto',
+        ImportNamespaceSpecifier: 'Importar todo (*)',
+        ImportSpecifier: 'Nombre importado',
+        ExportNamedDeclaration: 'Exportación',
+        ExportDefaultDeclaration: 'Exportación por defecto',
+        ExportAllDeclaration: 'Exportar todo (*)',
+        ExportSpecifier: 'Nombre exportado',
+      };
+      const tipoNodo = (t) => TIPOS_NODO[t] || t;
+
+      const CAMPOS = {
+        body: 'cuerpo', declarations: 'variables', init: 'valor inicial', params: 'parámetros', defaultValue: 'valor por defecto',
+        test: 'condición', consequent: 'entonces', alternate: 'si no', update: 'actualización', left: 'izquierda', right: 'derecha',
+        argument: 'argumento', arguments: 'argumentos', callee: 'función', object: 'objeto', property: 'propiedad',
+        expression: 'expresión', discriminant: 'valor evaluado', cases: 'casos', block: 'bloque', handler: 'captura',
+        finalizer: 'finalmente', param: 'error', elements: 'elementos', properties: 'propiedades', value: 'valor',
+        superClass: 'hereda de', expressions: 'expresiones',
+        specifiers: 'nombres', source: 'módulo', declaration: 'declaración',
+      };
+      const campo = (k) => CAMPOS[k] || k;
+
+      function grupoNodo(t) {
+        if (t === 'Program') return 'n-prog';
+        if (t === 'Literal') return 'n-lit';
+        if (t === 'Identifier' || t === 'ThisExpression') return 'n-id';
+        if (/^(VariableDeclar|FunctionDeclaration|Parameter|ClassDeclaration|MethodDefinition|FieldDefinition|Import|Export)/.test(t)) return 'n-decl';
+        if (/(Statement|SwitchCase|CatchClause)$/.test(t)) return 'n-stmt';
+        return 'n-expr';
+      }
+
+      // ---------- Ejemplos ----------
+      const EJEMPLOS = [
+        {
+          nombre: 'Variables y condicional',
+          codigo: [
+            '// Declaración de variables',
+            'int edad = 20;',
+            'float pi = 3.14;',
+            'string nombre = "Ana";',
+            '',
+            'if (edad >= 18 && pi != 0) {',
+            '  edad += 1;',
+            '  print(nombre);',
+            '} else {',
+            "  print('menor de edad');",
+            '}',
+          ].join('\n'),
+        },
+        {
+          nombre: 'Funciones y ciclos',
+          codigo: [
+            '// Funciones, ciclos y condiciones',
+            'func factorial(int n) -> int {',
+            '  if (n <= 1) {',
+            '    return 1;',
+            '  }',
+            '  return n * factorial(n - 1);',
+            '}',
+            '',
+            'int total = 0;',
+            'for (int i = 1; i <= 5; i++) {',
+            '  total += factorial(i);',
+            '}',
+            '',
+            'while (total > 100) {',
+            '  total = total - 50;',
+            '}',
+            '',
+            'print("Resultado:", total);',
+          ].join('\n'),
+        },
+        {
+          nombre: 'Expresiones y paréntesis',
+          codigo: [
+            '// Los paréntesis cambian el orden de las operaciones',
+            'int a = 2 + 3 * 4;',
+            'int b = (2 + 3) * 4;',
+            'float c = (a + b) / (2.5 - 0.5);',
+            'bool ok = !(a > b) && (c >= 10 || b == 20);',
+            'int mayor = a > b ? a : b;',
+            'int z = (a + 1, b + 2); // el operador coma devuelve el último valor',
+            'print((a + b) * 2, c, ok, mayor, z);',
+          ].join('\n'),
+        },
+        {
+          nombre: 'Módulos (import / export)',
+          codigo: [
+            '// Importar y exportar',
+            'import { sumar, restar as menos } from "matematicas";',
+            'import * as util from "utilidades";',
+            'import config from "config";',
+            '',
+            'export const VERSION = "1.0";',
+            'export func doble(int n) -> int {',
+            '  return n * 2;',
+            '}',
+            'export { sumar, menos as resta };',
+            'export default doble;',
+            'print(util.nombre, config);',
+          ].join('\n'),
+        },
+        {
+          nombre: 'Números y cadenas',
+          codigo: [
+            '// Formas de escribir números',
+            'int decimal = 42;',
+            'int miles = 1_000_000;',
+            'int hexa = 0xFF;',
+            'int binario = 0b1010;',
+            'int octal = 0o17;',
+            'float pi = 3.14159;',
+            'float corto = .5;',
+            'float cientifico = 2.5e-3;',
+            '',
+            '// Cadenas con distintas comillas',
+            'string a = "doble";',
+            "string b = 'simple';",
+            'string c = `plantilla`;',
+            'string d = "salto\\nde línea y \\"comillas\\"";',
+            '',
+            'print(decimal, miles, hexa, binario, octal);',
+            'print(pi, corto, cientifico);',
+            'print(a, b, c, d);',
+          ].join('\n'),
+        },
+        {
+          nombre: 'Todos los operadores',
+          codigo: [
+            'int a = 5; int b = 3; int c = 2; int d = 4;',
+            'int e = 6; int f = 7; int g = 8; int h = 2;',
+            'int r = b + c - d * e / f % g ** h;',
+            'a += 1; a -= 1; a *= 2; a /= 2; a %= 3;',
+            'bool x = a == b; x = a != b; x = a === b; x = a !== b;',
+            'x = a < b || a > b && a <= b || a >= b;',
+            'int n = a ?? b;',
+            'int y = a & b | c ^ d;',
+            'y = ~a << 1 >> 2 >>> 3;',
+            'int i = 0; int j = 0;',
+            'i++; --j;',
+            'int z = x ? 1 : 2;',
+            'let siguiente = (m) => m + 1;',
+            'print(r, x, n, y, z, i, j, siguiente(1));',
+          ].join('\n'),
+        },
+        {
+          nombre: 'Con errores léxicos',
+          codigo: [
+            'int x = 12abc;',
+            'string s = "texto sin cerrar;',
+            'int y = 5 ¿ 3;',
+            'string t = "escape \\q inválido";',
+            '/* comentario sin cerrar',
+          ].join('\n'),
+        },
+        {
+          nombre: 'Con errores semánticos',
+          codigo: [
+            '// Sintaxis correcta, pero sin sentido',
+            'int edad = "veinte";',
+            'int edad = 30;',
+            'float precio = 9.5;',
+            'int entero = precio;',
+            'const LIMITE;',
+            '',
+            'func suma(int a, int b) -> int {',
+            '  return a + b;',
+            '}',
+            'int r = suma(1);',
+            'int s = suma(1, "dos");',
+            '',
+            'func signo(int n) -> int {',
+            '  if (n > 0) { return 1; }',
+            '}',
+            '',
+            'if (edad) {',
+            '  print(total);',
+            '}',
+            'return 0;',
+          ].join('\n'),
+        },
+        {
+          nombre: 'Con errores sintácticos',
+          codigo: [
+            'int edad = ;',
+            'if (edad > 18 {',
+            '  print("mayor");',
+            '}',
+            'func suma(int a int b) -> int {',
+            '  return a + b',
+            '}',
+            'for (int i = 0; i < 3 i++) {',
+            '  print(i);',
+            '}',
+          ].join('\n'),
+        },
+      ];
+
+      // ---------- Etapas ----------
+      const ETAPAS = {
+        1: { titulo: 'Análisis léxico' },
+        2: { titulo: 'Análisis sintáctico' },
+        3: { titulo: 'Análisis semántico' },
+      };
+
+      // ---------- Estado ----------
+      const state = {
+        step: 1, ran: false, dirty: false, code: '',
+        tokens: [], errors: [],            // léxico
+        ast: null, syntaxErrors: [], parsed: false, // sintáctico
+        sem: null, view1: 'tabla', view2: 'arbol', view3: 'simbolos', treeOpen: 'default', filter: null,
+      };
+
+      const editor = $('codigo');
+      const gutter = $('gutter');
+      const resultView = $('resultView');
+      const realTokens = () => state.tokens.filter((t) => t.type !== 'EOF');
+
+      // ---------- Editor ----------
+      function renderGutter(errLines, warnLines) {
+        const n = editor.value.split('\n').length;
+        gutter.replaceChildren();
+        for (let i = 1; i <= n; i++) {
+          gutter.appendChild(h('div', {
+            class: errLines && errLines.has(i) ? 'err' : (warnLines && warnLines.has(i) ? 'warn' : null), text: i,
+          }));
+        }
+        gutter.scrollTop = editor.scrollTop;
+      }
+
+      function updateMeta() {
+        const v = editor.value;
+        const p = editor.selectionStart || 0;
+        const before = v.slice(0, p);
+        const line = before.split('\n').length;
+        const col = p - before.lastIndexOf('\n');
+        $('pos').textContent = `Línea ${line}, columna ${col}`;
+        $('state-0').textContent = plural(v.split('\n').length, 'línea', 'líneas');
+      }
+
+      function offsetOf(code, line, col) {
+        let o = 0;
+        const lines = code.split('\n');
+        for (let i = 0; i < line - 1 && i < lines.length; i++) o += lines[i].length + 1;
+        return o + col - 1;
+      }
+
+      // Selecciona un rango del editor (líneas y columnas desde 1) y lo deja a la vista
+      function selectInEditor(a, b, line) {
+        editor.focus({ preventScroll: true });
+        editor.setSelectionRange(a, Math.max(b, a + 1));
+        const top = (line - 1) * LINE_H;
+        if (top < editor.scrollTop || top > editor.scrollTop + editor.clientHeight - 2 * LINE_H) {
+          editor.scrollTop = Math.max(0, top - 2 * LINE_H);
+        }
+        updateMeta();
+      }
+
+      function stillMatches() {
+        if (editor.value === state.code) return true;
+        toast('Cambiaste el código. Vuelve a analizar para ubicar esto.');
+        return false;
+      }
+
+      function jumpTo(line, col, len) {
+        if (!stillMatches()) return;
+        const o = offsetOf(state.code, line, col);
+        selectInEditor(o, o + Math.max(len, 1), line);
+      }
+
+      function jumpRange(loc) {
+        if (!stillMatches()) return;
+        const a = offsetOf(state.code, loc.line, loc.column);
+        const b = offsetOf(state.code, loc.endLine, loc.endColumn);
+        selectInEditor(a, b, loc.line);
+      }
+
+      // Longitud aproximada de un error léxico para poder seleccionarlo
+      function lexErrorLength(e) {
+        const start = offsetOf(state.code, e.line, e.column);
+        const code = state.code;
+        if (/^Comentario/.test(e.message)) return code.length - start;
+        if (/^Cadena/.test(e.message)) {
+          const nl = code.indexOf('\n', start);
+          return (nl === -1 ? code.length : nl) - start;
+        }
+        const m = e.message.match(/'(.+)'$/);
+        if (/^Número/.test(e.message) && m) return m[1].length;
+        return 1;
+      }
+
+      // ---------- Análisis ----------
+      function analizar() {
+        const code = editor.value;
+        if (!code.trim()) {
+          toast('Escribe código en el editor antes de analizar.');
+          editor.focus();
+          return;
+        }
+        const lex = new Lexer(code).tokenize();
+        let ast = null;
+        let syntaxErrors = [];
+        let parsed = false;
+        let sem = null;
+        if (!lex.errors.length) {
+          const r = parseTokens(lex.tokens);
+          ast = r.ast;
+          syntaxErrors = r.errors;
+          parsed = true;
+          if (!syntaxErrors.length) {
+            try {
+              sem = analyzeProgram(ast);
+            } catch (e) {
+              sem = { errors: [{ message: 'Error interno del análisis semántico: ' + e.message, severity: 'error', line: 1, column: 1, length: 1 }], warnings: [], symbols: [], types: new WeakMap() };
+            }
+          }
+        }
+
+        // Se muestra la primera etapa con problemas; si no hay, se mantiene la que el usuario estaba viendo
+        let step = state.step;
+        if (lex.errors.length) step = 1;
+        else if (syntaxErrors.length) step = 2;
+        else if (sem && sem.errors.length) step = 3;
+
+        Object.assign(state, {
+          code, tokens: lex.tokens, errors: lex.errors, ast, syntaxErrors, parsed, sem,
+          ran: true, dirty: false, filter: null, step,
+        });
+        renderGutter(
+          new Set([...lex.errors, ...syntaxErrors, ...(sem ? sem.errors : [])].map((e) => e.line)),
+          new Set(sem ? sem.warnings.map((e) => e.line) : []));
+        renderAll();
+      }
+
+      // ---------- Pipeline ----------
+      // Estado visible de cada etapa: clase, símbolo del círculo y texto de la etiqueta
+      function stageInfo(i) {
+        if (!state.ran) return { cls: '', mark: String(i), text: 'Sin ejecutar' };
+        let s;
+        if (i === 3) {
+          if (state.errors.length || state.syntaxErrors.length) s = { cls: 'is-blocked', mark: '–', text: 'Bloqueado' };
+          else if (state.sem.errors.length) s = { cls: 'is-error', mark: '!', text: plural(state.sem.errors.length, 'error', 'errores') };
+          else if (state.sem.warnings.length) s = { cls: 'is-ok', mark: '✓', text: plural(state.sem.warnings.length, 'aviso', 'avisos') };
+          else s = { cls: 'is-ok', mark: '✓', text: 'Sin errores' };
+        } else if (i === 1) {
+          s = state.errors.length
+            ? { cls: 'is-error', mark: '!', text: plural(state.errors.length, 'error', 'errores') }
+            : { cls: 'is-ok', mark: '✓', text: plural(realTokens().length, 'token', 'tokens') };
+        } else if (state.errors.length) {
+          s = { cls: 'is-blocked', mark: '–', text: 'Bloqueado' };
+        } else if (state.syntaxErrors.length) {
+          s = { cls: 'is-error', mark: '!', text: plural(state.syntaxErrors.length, 'error', 'errores') };
+        } else {
+          s = { cls: 'is-ok', mark: '✓', text: plural(state.ast.body.length, 'instrucción', 'instrucciones') };
+        }
+        if (state.dirty) { s.cls += ' is-stale'; s.text = 'Desactualizado'; }
+        return s;
+      }
+
+      function renderStations() {
+        for (let i = 1; i <= 3; i++) {
+          const li = $('li-' + i);
+          const s = stageInfo(i);
+          li.classList.remove('is-ok', 'is-error', 'is-stale', 'is-blocked', 'reached', 'reached-bad');
+          li.classList.toggle('is-active', state.step === i);
+          s.cls.split(' ').filter(Boolean).forEach((c) => li.classList.add(c));
+          if (s.cls.includes('is-ok')) li.classList.add('reached');
+          if (s.cls.includes('is-error')) li.classList.add('reached-bad');
+          const btn = li.querySelector('button');
+          if (state.step === i) btn.setAttribute('aria-current', 'step'); else btn.removeAttribute('aria-current');
+          $('dot-' + i).textContent = s.mark;
+          $('state-' + i).textContent = s.text;
+        }
+      }
+
+      // ---------- Cabecera de resultados ----------
+      function renderTools() {
+        const box = $('resTools');
+        box.replaceChildren();
+        const visible = state.ran && (state.step === 1 || (state.step === 2 && state.parsed) || (state.step === 3 && !!state.sem));
+        box.hidden = !visible;
+        if (!visible) return;
+
+        const seg = (key, opciones) => h('div', { class: 'seg', role: 'group', 'aria-label': 'Forma de ver los resultados' },
+          opciones.map(([val, texto]) => h('button', {
+            type: 'button', 'aria-pressed': String(state[key] === val),
+            onclick: () => { state[key] = val; renderResults(); },
+          }, texto)));
+
+        if (state.step === 1) {
+          box.append(seg('view1', [['tabla', 'Tabla'], ['codigo', 'Código coloreado']]));
+        } else {
+          if (state.step === 3) box.append(seg('view3', [['simbolos', 'Símbolos'], ['arbol', 'Árbol con tipos']]));
+          else box.append(seg('view2', [['arbol', 'Árbol'], ['json', 'JSON']]));
+          if ((state.step === 2 && state.view2 === 'arbol') || (state.step === 3 && state.view3 === 'arbol')) {
+            box.append(
+              h('button', { type: 'button', class: 'btn small', onclick: () => { state.treeOpen = 'all'; renderResults(); } }, 'Expandir todo'),
+              h('button', { type: 'button', class: 'btn small', onclick: () => { state.treeOpen = 'none'; renderResults(); } }, 'Contraer todo'));
+          }
+        }
+        box.append(h('button', { type: 'button', class: 'btn small', onclick: copiarJSON }, 'Copiar JSON'));
+      }
+
+      // ---------- Resultados ----------
+      function renderResults() {
+        $('resTitle').textContent = ETAPAS[state.step].titulo;
+        renderTools();
+        resultView.replaceChildren();
+        if (state.step === 1) return state.ran ? renderLexico() : renderEmpty(1);
+        if (state.step === 2) return renderSintactico();
+        return renderSemantico();
+      }
+
+      function renderEmpty(step) {
+        if (step === 1) {
+          resultView.append(h('div', { class: 'empty' },
+            h('h3', { text: 'Aún no analizaste nada' }),
+            h('p', { text: 'Aquí verás cómo el léxico separa tu código en tokens y qué errores encuentra.' }),
+            h('ol', null,
+              h('li', { text: 'Escribe tu código o carga un ejemplo.' }),
+              h('li', { text: 'Pulsa «Analizar código».' }),
+              h('li', { text: 'Revisa los tokens, y luego pasa al análisis sintáctico.' }))));
+        } else {
+          resultView.append(h('div', { class: 'empty' },
+            h('h3', { text: 'Aún no analizaste nada' }),
+            h('p', { text: 'El análisis sintáctico usa los tokens del léxico y construye el árbol del programa. Pulsa «Analizar código» y se ejecutan las dos etapas, en orden.' })));
+        }
+      }
+
+      // Lista de errores clicables (léxicos o sintácticos)
+      function errorList(errors, lengthOf, warns) {
+        const ul = h('ul', { class: 'errors' + (warns ? ' warns' : '') });
+        errors.forEach((e) => {
+          ul.append(h('li', null, h('button', {
+            type: 'button',
+            onclick: () => jumpTo(e.line, e.column, lengthOf(e)),
+          }, h('span', { class: 'where', text: `Línea ${e.line}, columna ${e.column}` }), h('span', { text: e.message }))));
+        });
+        return ul;
+      }
+
+      function statusBar(ok, texto, extra) {
+        return h('div', { class: 'status ' + (ok ? 'ok' : 'bad') },
+          h('span', { class: 'mark', text: ok ? '✓' : '!' }),
+          h('span', { text: texto }),
+          extra);
+      }
+
+      // ---------- Etapa 1: léxico ----------
+      function renderLexico() {
+        const real = realTokens();
+        const n = state.errors.length;
+
+        if (!n) {
+          resultView.append(statusBar(true, `Sin errores léxicos. Se encontraron ${plural(real.length, 'token', 'tokens')}.`,
+            h('button', { type: 'button', class: 'btn small', onclick: () => { state.step = 2; renderAll(); } }, 'Ver análisis sintáctico')));
+        } else {
+          const txt = n === 1 ? 'Se encontró 1 error léxico.' : `Se encontraron ${n} errores léxicos.`;
+          resultView.append(statusBar(false, `${txt} Haz clic en uno para ubicarlo en el código.`));
+          resultView.append(errorList(state.errors, lexErrorLength));
+        }
+
+        const conteo = {};
+        real.forEach((t) => { conteo[t.type] = (conteo[t.type] || 0) + 1; });
+        if (!real.length) {
+          resultView.append(h('div', { class: 'empty' }, h('p', { text: 'El código no produjo ningún token.' })));
+          return;
+        }
+        const chips = h('div', { class: 'chips', role: 'group', 'aria-label': 'Filtrar por categoría' });
+        const chip = (tipo, texto, cuenta) => h('button', {
+          type: 'button', class: 'chip' + (tipo ? ' c-' + tipo : ''),
+          'aria-pressed': String(state.filter === tipo),
+          onclick: () => { state.filter = state.filter === tipo ? null : tipo; renderResults(); },
+        }, h('span', { class: 'sw' }), texto, h('b', { text: cuenta }));
+        chips.append(chip(null, 'Todos', real.length));
+        Object.keys(ETIQUETAS).filter((k) => conteo[k]).forEach((k) => chips.append(chip(k, etiqueta(k), conteo[k])));
+        resultView.append(chips);
+        resultView.append(state.view1 === 'tabla' ? buildTable() : buildHighlight());
+      }
+
+      // Muestra el valor solo cuando aporta algo distinto al lexema
+      function valorCelda(t, esFin) {
+        if (esFin) return h('td', { class: 'code' });
+        const v = t.value;
+        const texto = typeof v === 'string' ? JSON.stringify(v).slice(1, -1) : String(v);
+        if (texto === t.lexeme) return h('td', { class: 'code num', text: '—', title: 'Es igual al lexema' });
+        return h('td', { class: 'code', text: texto });
+      }
+
+      function buildTable() {
+        const tbody = h('tbody');
+        state.tokens.forEach((t) => {
+          const esFin = t.type === 'EOF';
+          if (state.filter && (t.type !== state.filter)) return;
+          const tr = h('tr', { class: esFin ? 'end' : null },
+            h('td', null, h('span', { class: `badge c-${t.type}`, text: etiqueta(t.type) })),
+            h('td', { class: 'code', text: esFin ? '(fin del código)' : t.lexeme }),
+            valorCelda(t, esFin),
+            h('td', { class: 'num', text: t.line }),
+            h('td', { class: 'num', text: t.column }));
+          if (!esFin) {
+            tr.addEventListener('click', () => {
+              const prev = tbody.querySelector('tr.sel');
+              if (prev) prev.classList.remove('sel');
+              tr.classList.add('sel');
+              jumpTo(t.line, t.column, t.lexeme.length);
+            });
+          }
+          tbody.append(tr);
+        });
+        const thead = h('thead', null, h('tr', null,
+          ['Categoría', 'Lexema', 'Valor', 'Línea', 'Columna'].map((x) => h('th', { text: x }))));
+        return h('div', { class: 'table-wrap' }, h('table', null, thead, tbody));
+      }
+
+      function buildHighlight() {
+        const code = state.code;
+        const pre = h('pre', { class: 'code-view' });
+
+        const marks = realTokens().map((t) => {
+          const s = offsetOf(code, t.line, t.column);
+          return { kind: 'tok', t, s, e: s + t.lexeme.length, err: null };
+        });
+        state.errors.forEach((er) => {
+          const s = offsetOf(code, er.line, er.column);
+          const dentro = marks.find((m) => m.kind === 'tok' && s >= m.s && s < m.e);
+          if (dentro) dentro.err = er.message;
+          else marks.push({ kind: 'err', er, s, e: s + lexErrorLength(er) });
+        });
+        marks.sort((a, b) => a.s - b.s);
+
+        let cursor = 0;
+        const gap = (txt) => {
+          if (!txt) return;
+          pre.append(h('span', { class: /\S/.test(txt) ? 'cmt' : null, text: txt }));
+        };
+        marks.forEach((m) => {
+          if (m.s < cursor) return;
+          gap(code.slice(cursor, m.s));
+          if (m.kind === 'tok') {
+            const dim = state.filter && m.t.type !== state.filter;
+            pre.append(h('span', {
+              class: `tok c-${m.t.type}` + (dim ? ' dim' : '') + (m.err ? ' has-err' : ''),
+              title: etiqueta(m.t.type) + (m.err ? `: ${m.err}` : ''),
+              onclick: () => jumpTo(m.t.line, m.t.column, m.t.lexeme.length),
+              text: code.slice(m.s, m.e),
+            }));
+          } else {
+            pre.append(h('span', {
+              class: 'errmark', title: m.er.message,
+              onclick: () => jumpTo(m.er.line, m.er.column, m.e - m.s),
+              text: code.slice(m.s, m.e),
+            }));
+          }
+          cursor = m.e;
+        });
+        gap(code.slice(cursor));
+        return pre;
+      }
+
+      // ---------- Etapa 2: sintáctico ----------
+      function renderSintactico() {
+        if (!state.ran) return renderEmpty(2);
+
+        if (state.errors.length) {
+          resultView.append(h('div', { class: 'locked' },
+            h('h3', { text: 'Primero hay que corregir el análisis léxico' }),
+            h('p', { text: `El análisis sintáctico necesita los tokens del léxico, y el léxico encontró ${plural(state.errors.length, 'error', 'errores')}. Corrígelos y vuelve a analizar.` }),
+            h('button', { type: 'button', class: 'btn', onclick: () => { state.step = 1; renderAll(); } }, 'Ver errores léxicos')));
+          return;
+        }
+
+        const n = state.syntaxErrors.length;
+        const inst = state.ast.body.length;
+        if (!n) {
+          const detalle = inst
+            ? `Sintaxis correcta. ${plural(inst, 'instrucción', 'instrucciones')} y ${plural(countNodes(state.ast), 'nodo', 'nodos')} en el árbol.`
+            : 'Sintaxis correcta. El programa no tiene instrucciones (está vacío o solo tiene comentarios).';
+          resultView.append(statusBar(true, detalle,
+            h('button', { type: 'button', class: 'btn small', onclick: () => { state.step = 3; renderAll(); } }, 'Ver análisis semántico')));
+        } else {
+          const txt = n === 1 ? 'Se encontró 1 error sintáctico.' : `Se encontraron ${n} errores sintácticos.`;
+          resultView.append(statusBar(false, `${txt} Haz clic en uno para ubicarlo en el código.`));
+          resultView.append(errorList(state.syntaxErrors, (e) => e.length || 1));
+        }
+        if (!inst) return;
+
+        if (n) resultView.append(h('p', { class: 'caption', text: 'Árbol parcial: solo incluye las instrucciones que se pudieron leer sin errores.' }));
+        resultView.append(state.view2 === 'arbol' ? buildTree(state.ast) : h('pre', { class: 'code-view json', text: astJSON() }));
+      }
+
+      // ---------- Etapa 3: semántico ----------
+      function renderSemantico() {
+        if (!state.ran) {
+          resultView.append(h('div', { class: 'empty' },
+            h('h3', { text: 'Aún no analizaste nada' }),
+            h('p', { text: 'El análisis semántico recorre el árbol del programa y comprueba que tenga sentido: variables declaradas, tipos compatibles, funciones bien llamadas. Pulsa «Analizar código» y se ejecutan las tres etapas, en orden.' })));
+          return;
+        }
+        if (state.errors.length || state.syntaxErrors.length) {
+          const lex = state.errors.length > 0;
+          const n = lex ? state.errors.length : state.syntaxErrors.length;
+          resultView.append(h('div', { class: 'locked' },
+            h('h3', { text: lex ? 'Primero hay que corregir el análisis léxico' : 'Primero hay que corregir el análisis sintáctico' }),
+            h('p', { text: `El análisis semántico necesita un árbol completo y sin errores, y ${lex ? 'el léxico' : 'el sintáctico'} encontró ${plural(n, 'error', 'errores')}. Corrígelos y vuelve a analizar.` }),
+            h('button', { type: 'button', class: 'btn', onclick: () => { state.step = lex ? 1 : 2; renderAll(); } },
+              lex ? 'Ver errores léxicos' : 'Ver errores sintácticos')));
+          return;
+        }
+
+        const sem = state.sem;
+        const ne = sem.errors.length;
+        const nw = sem.warnings.length;
+        const col = h('div', { class: 'scroll-col' });
+        if (!ne) {
+          const base = state.ast.body.length ? 'Sin errores semánticos: el programa tiene sentido.' : 'El programa no tiene instrucciones, no hay nada que comprobar.';
+          resultView.append(statusBar(true, nw ? `${base} Hay ${plural(nw, 'aviso', 'avisos')}.` : base));
+        } else {
+          const txt = ne === 1 ? 'Se encontró 1 error semántico.' : `Se encontraron ${ne} errores semánticos.`;
+          resultView.append(statusBar(false, `${txt} Haz clic en uno para ubicarlo en el código.`));
+        }
+        if (ne) {
+          col.append(h('p', { class: 'list-title' }, 'Errores ', h('small', { text: '(impiden que el programa sea válido)' })));
+          col.append(errorList(sem.errors, (e) => e.length || 1));
+        }
+        if (nw) {
+          col.append(h('p', { class: 'list-title' }, 'Avisos ', h('small', { text: '(el programa es válido, pero conviene revisarlo)' })));
+          col.append(errorList(sem.warnings, (e) => e.length || 1, true));
+        }
+        if (state.view3 === 'arbol') {
+          col.append(h('p', { class: 'caption', text: 'Cada expresión muestra el tipo que le calculó el análisis semántico.' }));
+          col.append(buildTree(state.ast, true));
+        } else {
+          col.append(buildSymbols());
+        }
+        resultView.append(col);
+      }
+
+      const KIND_BADGE = { variable: 'IDENTIFIER', constante: 'INT', 'parámetro': 'STRING', 'función': 'KEYWORD', clase: 'TYPE', 'importación': 'SYMBOL' };
+      function buildSymbols() {
+        const syms = state.sem.symbols;
+        if (!syms.length) return h('div', { class: 'empty' }, h('p', { text: 'El programa no declara variables, funciones ni clases.' }));
+        const tbody = h('tbody');
+        syms.forEach((s) => {
+          const tr = h('tr', null,
+            h('td', { class: 'code', text: s.name }),
+            h('td', null, h('span', { class: `badge c-${KIND_BADGE[s.kind] || 'NOTE'}`, text: s.kind })),
+            h('td', { class: 'code', text: s.type }),
+            h('td', { text: s.scope }),
+            h('td', { class: 'num', text: s.line }),
+            s.used || s.kind === 'función' || s.kind === 'clase' || s.kind === 'parámetro'
+              ? h('td', { class: 'num', text: s.used ? 'sí' : '—' })
+              : h('td', { class: 'used-no', text: 'no' }));
+          tr.addEventListener('click', () => {
+            const prev = tbody.querySelector('tr.sel');
+            if (prev) prev.classList.remove('sel');
+            tr.classList.add('sel');
+            jumpTo(s.line, s.column, s.length);
+          });
+          tbody.append(tr);
+        });
+        const thead = h('thead', null, h('tr', null, ['Nombre', 'Clase', 'Tipo', 'Ámbito', 'Línea', 'Usado'].map((x) => h('th', { text: x }))));
+        return h('div', { class: 'table-wrap' }, h('table', null, thead, tbody));
+      }
+
+      const astReplacer = (k, v) => (k === 'loc' ? undefined : v);
+      const astJSON = () => JSON.stringify(state.ast, astReplacer, 2);
+
+      function countNodes(n) {
+        let c = 1;
+        for (const [k, v] of Object.entries(n)) {
+          if (k === 'loc') continue;
+          if (Array.isArray(v)) v.forEach((x) => { if (x && x.type) c += countNodes(x); });
+          else if (v && typeof v === 'object' && v.type) c += countNodes(v);
+        }
+        return c;
+      }
+
+      // --- Árbol navegable ---
+      function hideChild(node, k) {
+        if (k === 'id' && node.id && node.id.type === 'Identifier') return true;           // el nombre ya se ve en el resumen
+        if (node.type === 'MemberExpression' && k === 'property' && !node.computed) return true;
+        if (node.type === 'Property' && k === 'key') return true;
+        if (/Specifier$/.test(node.type)) return true;                                       // el resumen ya muestra los nombres
+        if (node.type === 'ExportAllDeclaration' && k === 'exported') return true;
+        return false;
+      }
+
+      function nodeChildren(node) {
+        const out = [];
+        for (const [k, v] of Object.entries(node)) {
+          if (k === 'type' || k === 'loc' || hideChild(node, k)) continue;
+          if (Array.isArray(v)) { if (v.length) out.push([k, v]); }
+          else if (v && typeof v === 'object' && v.type) out.push([k, v]);
+        }
+        return out;
+      }
+
+      function summary(n) {
+        switch (n.type) {
+          case 'Identifier': return n.name;
+          case 'Literal': return n.raw;
+          case 'VariableDeclaration': return [n.kind === 'typed' ? null : n.kind, n.dataType].filter(Boolean).join(' ');
+          case 'VariableDeclarator': return n.id.name;
+          case 'FunctionDeclaration': return `${n.id.name}(${n.params.map((p) => p.id.name).join(', ')})`;
+          case 'Parameter': return n.id.name;
+          case 'ClassDeclaration': return n.id.name;
+          case 'MethodDefinition': return `${n.id.name}(${n.params.map((p) => p.id.name).join(', ')})`;
+          case 'FieldDefinition': return n.id.name;
+          case 'BinaryExpression': case 'LogicalExpression': case 'AssignmentExpression': case 'UnaryExpression':
+            return n.operator;
+          case 'UpdateExpression': return `${n.operator} (${n.prefix ? 'prefijo' : 'posfijo'})`;
+          case 'MemberExpression': return n.computed ? '[ ]' : '.' + n.property.name;
+          case 'CallExpression': case 'NewExpression': return `(${n.arguments.length})`;
+          case 'SwitchCase': return n.test ? 'case' : 'default';
+          case 'ForOfStatement': return 'of';
+          case 'ForInStatement': return 'in';
+          case 'ArrowFunctionExpression': return `(${n.params.map((p) => p.id.name).join(', ')}) =>`;
+          case 'Property': return n.key.name || n.key.raw;
+          case 'ImportDefaultSpecifier': return n.local.name;
+          case 'ImportNamespaceSpecifier': return `* as ${n.local.name}`;
+          case 'ImportSpecifier': return n.imported.name === n.local.name ? n.imported.name : `${n.imported.name} as ${n.local.name}`;
+          case 'ExportSpecifier': return n.local.name === n.exported.name ? n.local.name : `${n.local.name} as ${n.exported.name}`;
+          case 'ExportAllDeclaration': return n.exported ? `* as ${n.exported.name}` : '*';
+          default: return '';
+        }
+      }
+
+      let showTypes = false;
+      function chipsFor(n) {
+        const out = [];
+        const add = (label, value) => out.push(h('span', { class: 'tchip' }, label ? `${label}: ` : '', h('b', { text: value })));
+        if (showTypes && state.sem) {
+          const t = state.sem.types.get(n);
+          if (t) add('tipo', t);
+        } else if (n.type === 'Literal') add('tipo', n.dataType);
+        if ((n.type === 'FunctionDeclaration' || n.type === 'MethodDefinition') && n.returnType) add('retorna', n.returnType);
+        if (n.type === 'Parameter') { if (n.dataType) add('tipo', n.dataType); if (n.rest) add('', 'resto'); }
+        if (n.type === 'MethodDefinition' && n.kind === 'constructor') add('', 'constructor');
+        if ((n.type === 'MemberExpression' || n.type === 'CallExpression') && n.optional) add('', 'opcional ?.');
+        if (n.type === 'Property' && n.shorthand) add('', 'abreviada');
+        if (n.parenthesized) add('', 'entre paréntesis');
+        return out;
+      }
+
+      function isOpen(depth) {
+        if (state.treeOpen === 'all') return true;
+        if (state.treeOpen === 'none') return depth === 0;
+        return depth < 3;
+      }
+
+      function caret(has, open, ul) {
+        if (!has) return h('span', { class: 'spacer' });
+        const b = h('button', {
+          type: 'button', class: 'caret', 'aria-expanded': String(open), 'aria-label': 'Mostrar u ocultar el contenido',
+        });
+        b.addEventListener('click', () => {
+          const abierto = b.getAttribute('aria-expanded') === 'true';
+          b.setAttribute('aria-expanded', String(!abierto));
+          ul.hidden = abierto;
+        });
+        return b;
+      }
+
+      function selectRow(row) {
+        const prev = resultView.querySelector('.trow.sel');
+        if (prev) prev.classList.remove('sel');
+        row.classList.add('sel');
+      }
+
+      function treeNode(node, label, depth) {
+        const kids = nodeChildren(node);
+        const open = isOpen(depth);
+        const li = h('li');
+        const ul = kids.length ? h('ul', { hidden: !open }) : null;
+        const row = h('div', { class: 'trow' }, caret(kids.length > 0, open, ul));
+        if (label) row.append(h('span', { class: 'tlabel', text: label + ':' }));
+        row.append(h('button', {
+          type: 'button', class: 'tnode ' + grupoNodo(node.type), title: node.type,
+          onclick: () => { selectRow(row); jumpRange(node.loc); },
+        }, tipoNodo(node.type)));
+        const sum = summary(node);
+        if (sum) row.append(h('code', { class: 'tsum', text: sum }));
+        chipsFor(node).forEach((c) => row.append(c));
+        li.append(row);
+        if (ul) {
+          kids.forEach(([k, v]) => ul.append(Array.isArray(v) ? treeList(k, v, depth + 1) : treeNode(v, campo(k), depth + 1)));
+          li.append(ul);
+        }
+        return li;
+      }
+
+      function treeList(key, arr, depth) {
+        const open = isOpen(depth);
+        const ul = h('ul', { hidden: !open });
+        const row = h('div', { class: 'trow' }, caret(true, open, ul), h('span', { class: 'tgroup', text: `${campo(key)} (${arr.length})` }));
+        arr.forEach((n) => ul.append(treeNode(n, null, depth + 1)));
+        return h('li', null, row, ul);
+      }
+
+      function buildTree(ast, conTipos) {
+        showTypes = !!conTipos;
+        return h('div', { class: 'tree-wrap' }, h('ul', { class: 'tree' }, treeNode(ast, null, 0)));
+      }
+
+      // ---------- Render general ----------
+      function renderAll() {
+        $('panelRes').classList.toggle('is-stale', state.dirty);
+        $('staleBanner').hidden = !state.dirty;
+        renderStations();
+        renderResults();
+      }
+
+      // ---------- Referencia ----------
+      function buildReference() {
+        const box = $('refBody');
+        box.replaceChildren();
+        box.append(h('p', { text: 'Esto es todo lo que el análisis léxico reconoce. Lo que no esté aquí se marca como error léxico. Las reglas de cómo combinar estas piezas las revisa el análisis sintáctico.' }));
+
+        const grupos = {};
+        OPERATORS.forEach((tipo, op) => { (grupos[tipo] = grupos[tipo] || []).push(op); });
+        const filas = [['KEYWORD', [...KEYWORDS]], ['TYPE', [...TYPES]]];
+        Object.keys(ETIQUETAS).forEach((k) => { if (grupos[k]) filas.push([k, grupos[k]]); });
+
+        filas.forEach(([tipo, lista]) => {
+          box.append(h('div', { class: 'alfa-row' },
+            h('span', { class: `badge c-${tipo}`, text: etiqueta(tipo) }),
+            h('div', { class: 'alfa-items' }, lista.map((x) => h('code', { text: x })))));
+        });
+
+        box.append(h('h3', { text: 'Reglas de escritura' }));
+        [
+          ['IDENTIFIER', 'Empiezan con una letra (a-z, A-Z, ñ, con tilde u otra letra Unicode), «_» o «$». Después pueden llevar dígitos.'],
+          ['INT', 'Decimal (42, 1_000), hexadecimal (0xFF), binario (0b1010) u octal (0o17).'],
+          ['FLOAT', 'Con punto o exponente: 3.14, .5, 1e10, 2.5E-3.'],
+          ['STRING', 'Entre comillas dobles, simples o invertidas. Escapes: \\n \\t \\r \\\\ \\" \\\' \\0 \\xHH \\uHHHH.'],
+          ['NOTE', 'Comentarios: // hasta el final de la línea, o /* ... */ en varias líneas. Se ignoran, igual que espacios y saltos de línea.'],
+        ].forEach(([tipo, texto]) => {
+          box.append(h('div', { class: 'alfa-row' },
+            h('span', { class: `badge c-${tipo}`, text: tipo === 'NOTE' ? 'Comentarios' : etiqueta(tipo) }),
+            h('span', { class: 'alfa-note', text: texto })));
+        });
+
+        box.append(h('h3', { text: 'Instrucciones que acepta el análisis sintáctico' }));
+        [
+          ['Declaraciones', 'int x = 5;   let y = 2;   const PI = 3.14;   int a = 1, b;   int[] lista = [1, 2, 3];'],
+          ['Asignaciones', 'x = 5;   x += 1;   a = b = 0;   arr[0] = 1;   obj.campo = 2;   i++;'],
+          ['Condicionales', 'if (cond) { ... } else if (otra) { ... } else { ... }   switch (x) { case 1: ... default: ... }'],
+          ['Ciclos', 'while (cond) { ... }   do { ... } while (cond);   for (int i = 0; i < n; i++) { ... }   for (let x of lista) { ... }'],
+          ['Funciones', 'func suma(int a, int b) -> int { return a + b; }   int doble(int n) { ... }   (a, b) => a + b'],
+          ['Salida y errores', 'print(x);   print x, y;   try { ... } catch (e) { ... } finally { ... }   throw "error";'],
+          ['Clases', 'class A extends B { int x = 1; get() { return this.x; } }'],
+          ['Módulos', 'import { a, b as c } from "m";   import * as u from "m";   import x from "m";   export int y = 1;   export { a };   export default f;   (solo al nivel principal)'],
+          ['Expresiones', 'Con paréntesis y precedencia: (a + b) * c,  a ? b : c,  !x && y,  f(1)(2),  a.b[c],  new A(1),  { clave: valor }'],
+          ['Operador coma', '(a, b)  evalúa ambos y devuelve el último;   a = 1, b = 2;   for (i = 0, j = 9; i < j; i++, j--) { ... }'],
+        ].forEach(([titulo, ejemplo]) => {
+          box.append(h('div', { class: 'alfa-row' },
+            h('span', { class: 'badge c-NOTE', text: titulo }),
+            h('code', { class: 'alfa-note', text: ejemplo })));
+        });
+
+        box.append(h('h3', { text: 'Lo que comprueba el análisis semántico' }));
+        [
+          ['Variables', 'Deben declararse antes de usarse, no repetirse en el mismo ámbito, y una constante (const) no se puede reasignar.'],
+          ['Tipos', 'int x = "hola";  da error. Un int cabe en un float, pero un float no cabe en un int. Las condiciones deben ser bool.'],
+          ['Operadores', 'Aritmética solo con números (+ también une textos). && || ! solo con bool. Dividir entre 0 es un error.'],
+          ['Funciones', 'Número y tipo de argumentos correctos, valor de retorno del tipo declarado y return en todos los caminos.'],
+          ['Control', "'return' solo dentro de funciones, 'break' en ciclos o switch, 'continue' en ciclos, 'this' dentro de clases."],
+          ['Clases', 'Miembros existentes, constructor con los argumentos correctos, herencia con una clase que exista.'],
+          ['Switch', "Cada 'case' del mismo tipo que el valor evaluado, sin valores repetidos y con un solo 'default'."],
+          ['Avisos', 'Variable o import sin usar, código después de un return, expresión que no hace nada. No impiden compilar.'],
+        ].forEach(([titulo, texto]) => {
+          box.append(h('div', { class: 'alfa-row' },
+            h('span', { class: 'badge c-NOTE', text: titulo }),
+            h('span', { class: 'alfa-note', text: texto })));
+        });
+      }
+
+      // ---------- Aviso (toast) ----------
+      let toastTimer;
+      function toast(msg) {
+        const t = $('toast');
+        t.textContent = msg;
+        t.classList.add('show');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => t.classList.remove('show'), 2400);
+      }
+
+      async function copiarJSON() {
+        let data;
+        if (state.step === 3 && state.sem) {
+          const conv = (e) => ({ linea: e.line, columna: e.column, mensaje: e.message });
+          data = JSON.stringify({
+            errores: state.sem.errors.map(conv), avisos: state.sem.warnings.map(conv),
+            simbolos: state.sem.symbols.map((x) => ({ nombre: x.name, clase: x.kind, tipo: x.type, ambito: x.scope, linea: x.line, usado: x.used })),
+          }, null, 2);
+        } else if (state.step === 2) {
+          data = astJSON();
+        } else {
+          data = JSON.stringify({
+            tokens: realTokens().map((t) => ({
+              tipo: t.type, categoria: etiqueta(t.type), lexema: t.lexeme, valor: t.value, linea: t.line, columna: t.column,
+            })),
+            errores: state.errors,
+          }, null, 2);
+        }
+        try {
+          await navigator.clipboard.writeText(data);
+        } catch (_) {
+          const ta = h('textarea', { style: 'position:fixed;opacity:0', 'aria-hidden': 'true' });
+          ta.value = data;
+          document.body.append(ta);
+          ta.select();
+          try { document.execCommand('copy'); } catch (__) { /* sin portapapeles */ }
+          ta.remove();
+        }
+        toast('JSON copiado al portapapeles');
+      }
+
+      // ---------- Eventos ----------
+      editor.addEventListener('input', () => {
+        if (state.ran && !state.dirty) {
+          state.dirty = true;
+          $('panelRes').classList.add('is-stale');
+          $('staleBanner').hidden = false;
+          renderStations();
+        }
+        renderGutter(null);
+        updateMeta();
+      });
+      editor.addEventListener('scroll', () => { gutter.scrollTop = editor.scrollTop; });
+      ['keyup', 'click', 'select'].forEach((ev) => editor.addEventListener(ev, updateMeta));
+      document.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); analizar(); }
+      });
+
+      $('btnAnalizar').addEventListener('click', analizar);
+      $('btnReanalizar').addEventListener('click', analizar);
+      $('btnLimpiar').addEventListener('click', () => {
+        editor.value = '';
+        editor.dispatchEvent(new Event('input'));
+        editor.focus();
+      });
+      document.querySelectorAll('button.st').forEach((b) => b.addEventListener('click', () => {
+        state.step = Number(b.dataset.step);
+        renderAll();
+      }));
+
+      const dlg = $('dlgRef');
+      $('btnRef').addEventListener('click', () => {
+        if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', '');
+      });
+      $('btnCerrarRef').addEventListener('click', () => { if (dlg.close) dlg.close(); else dlg.removeAttribute('open'); });
+      dlg.addEventListener('click', (e) => { if (e.target === dlg && dlg.close) dlg.close(); });
+
+      // Selector de ejemplos
+      const sel = $('ejemplos');
+      sel.append(h('option', { value: '', text: 'Cargar un ejemplo…' }));
+      EJEMPLOS.forEach((ej, i) => sel.append(h('option', { value: String(i), text: ej.nombre })));
+      sel.addEventListener('change', () => {
+        if (sel.value === '') return;
+        editor.value = EJEMPLOS[Number(sel.value)].codigo;
+        sel.value = '';
+        editor.scrollTop = 0;
+        analizar();
+      });
+
+      // ---------- Inicio ----------
+      $('kbd').textContent = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? '⌘ Enter' : 'Ctrl Enter';
+      editor.value = EJEMPLOS[0].codigo;
+      renderGutter();
+      updateMeta();
+
+      const faltan = [];
+      if (typeof Lexer === 'undefined') faltan.push('lexer.js');
+      if (typeof Parser === 'undefined') faltan.push('parser.js');
+      if (typeof analyzeProgram === 'undefined') faltan.push('semantic.js');
+      if (faltan.length) {
+        const f = $('fatal');
+        f.textContent = `No se encontró ${faltan.join(' ni ')}. Debe estar en la misma carpeta que index.html.`;
+        f.hidden = false;
+        $('btnAnalizar').disabled = true;
+      } else {
+        buildReference();
+      }
+      renderAll();
+    })();
+  </script>
+</body>
+
+</html>
